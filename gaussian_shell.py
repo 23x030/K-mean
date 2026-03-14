@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-from scipy.spatial import ConvexHull
-from matplotlib.path import Path
 import os
 
 # =============================================================================
@@ -192,13 +190,71 @@ def find_optimal_k(X, min_k=2, max_k_factor=0.1):
             continue
     return best_k
 
+def manual_convex_hull_2d(points):
+    def cross_product(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    pts = [tuple(p) for p in points]
+    pts = list(set(pts))
+    if len(pts) <= 3:
+        return np.array(pts)
+    
+    pts.sort()
+    
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross_product(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+        
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross_product(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+        
+    return np.array(lower[:-1] + upper[:-1])
+
 def ray_casting_inside(point, boundary_points):
+    if len(boundary_points) == 0:
+        return False
     if boundary_points.shape[1] != 2:
         mins = np.min(boundary_points, axis=0)
         maxs = np.max(boundary_points, axis=0)
         return np.all((point >= mins - 0.01) & (point <= maxs + 0.01))
-    poly_path = Path(boundary_points)
-    return poly_path.contains_point(point)
+    
+    x, y = point[0], point[1]
+    n = len(boundary_points)
+    inside = False
+    p1x, p1y = boundary_points[0][0], boundary_points[0][1]
+    for i in range(n + 1):
+        p2x, p2y = boundary_points[i % n][0], boundary_points[i % n][1]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xints = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xints:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside
+
+def get_boundary(Xc, tuple_method='convex'):
+    if len(Xc) < 3:
+        return Xc
+    if Xc.shape[1] == 2:
+        return manual_convex_hull_2d(Xc)
+    else:
+        boundary_idx = set()
+        for i in range(Xc.shape[1]):
+            boundary_idx.add(np.argmin(Xc[:, i]))
+            boundary_idx.add(np.argmax(Xc[:, i]))
+        centroid = np.mean(Xc, axis=0)
+        dists = np.linalg.norm(Xc - centroid, axis=1)
+        num_pts = max(1, len(Xc) // 4)
+        for idx in np.argsort(dists)[-num_pts:]:
+            boundary_idx.add(idx)
+        return Xc[list(boundary_idx)]
 
 def get_centroid(Xc):
     k_opt = find_optimal_k(Xc)
@@ -272,13 +328,11 @@ def process_dataset(df, class_col, feature_cols):
         centroid = kmeans_orig.cluster_centers_.mean(axis=0)
         
         # Gaussian Shell specific hull logic
-        try:
-            hull = ConvexHull(Xc)
-            rhull = np.max(np.linalg.norm(Xc[hull.vertices] - centroid, axis=1))
-            boundary = Xc[hull.vertices]
-        except:
+        boundary = get_boundary(Xc, 'convex')
+        if len(boundary) > 0:
+            rhull = np.max(np.linalg.norm(boundary - centroid, axis=1))
+        else:
             rhull = np.max(np.linalg.norm(Xc - centroid, axis=1))
-            boundary = Xc
         
         S, validation_score = generate_gaussian_shell(Xc, size, centroid, boundary, rhull)
         print(f"Method Validation Score (Ray Casting Inside): {validation_score:.4f}")

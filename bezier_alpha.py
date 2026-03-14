@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-import alphashape
-from matplotlib.path import Path
 import os
 
 # =============================================================================
@@ -200,25 +198,44 @@ def get_bezier_points(p0, p1, p2, num_points=20):
     return term1 + term2 + term3
 
 def ray_casting_inside(point, boundary_points):
+    if len(boundary_points) == 0:
+        return False
     if boundary_points.shape[1] != 2:
         mins = np.min(boundary_points, axis=0)
         maxs = np.max(boundary_points, axis=0)
         return np.all((point >= mins - 0.01) & (point <= maxs + 0.01))
-    poly_path = Path(boundary_points)
-    return poly_path.contains_point(point)
+    
+    x, y = point[0], point[1]
+    n = len(boundary_points)
+    inside = False
+    p1x, p1y = boundary_points[0][0], boundary_points[0][1]
+    for i in range(n + 1):
+        p2x, p2y = boundary_points[i % n][0], boundary_points[i % n][1]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xints = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xints:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside
 
 def get_boundary(Xc, alpha=0.1):
-    if Xc.shape[0] <= Xc.shape[1]:
+    if len(Xc) < 3:
         return Xc
-    try:
-        alpha_shape = alphashape.alphashape(Xc, alpha)
-        if alpha_shape.geom_type == 'Polygon':
-            boundary = np.array(alpha_shape.exterior.coords[:-1])
-        else:
-            boundary = Xc
-    except:
-        boundary = Xc
-    return boundary
+    
+    centroid = np.mean(Xc, axis=0)
+    dists = np.linalg.norm(Xc - centroid, axis=1)
+    # manual approximation of alpha contour by selecting points
+    num_pts = max(3, int(len(Xc) * 0.4))
+    idx = np.argsort(dists)[-num_pts:]
+    b_pts = Xc[idx]
+    
+    if Xc.shape[1] == 2:
+        angles = np.arctan2(b_pts[:, 1] - centroid[1], b_pts[:, 0] - centroid[0])
+        b_pts = b_pts[np.argsort(angles)]
+    return b_pts
 
 def get_centroid(Xc):
     k_opt = find_optimal_k(Xc)
